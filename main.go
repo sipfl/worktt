@@ -41,6 +41,9 @@ const mergeGap = 60 * time.Second
 // are not real working time and get dropped.
 const minActive = 90 * time.Second
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 type interval struct{ start, end time.Time }
 
 type dayStats struct {
@@ -264,11 +267,17 @@ func dayStart(t time.Time) time.Time {
 
 func main() {
 	var (
-		dateFlag = flag.String("date", "", "single day detail view (YYYY-MM-DD)")
-		endFlag  = flag.String("end", "", "7-day overview ending on this date (YYYY-MM-DD, default today)")
-		dbFlag   = flag.String("db", defaultDB(), "path to knowledgeC.db")
+		dateFlag    = flag.String("date", "", "single day detail view (YYYY-MM-DD)")
+		endFlag     = flag.String("end", "", "7-day overview ending on this date (YYYY-MM-DD, default today)")
+		dbFlag      = flag.String("db", defaultDB(), "path to knowledgeC.db")
+		versionFlag = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println("worktt", version)
+		return
+	}
 
 	const layout = "2006-01-02"
 
