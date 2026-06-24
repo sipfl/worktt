@@ -1,8 +1,8 @@
 # worktt
 
-Arbeitszeiten aus der macOS `knowledgeC.db` ableiten. Nutzt primär den App-Nutzungs-Stream
-(`/app/usage`) des lokalen Macs — mit Fallback auf den Display-Backlight-Stream
-(`/display/isBacklit`) — und leitet daraus Beginn, Ende, Brutto-, Aktiv- und Pausenzeit ab.
+Derive working hours from the macOS `knowledgeC.db`. Uses the local Mac's app-usage
+stream (`/app/usage`) as the primary source, with a fallback to the display-backlight
+stream (`/display/isBacklit`), and reports start, end, gross, active and break time.
 
 ## Build
 
@@ -16,96 +16,101 @@ go build -o worktt .
 go test ./...
 ```
 
-Die Tests bauen über das `sqlite3`-CLI eine kleine Fake-`knowledgeC.db` und prüfen
-den echten Query-Pfad: Geräte-Filter (Mac vs. iPhone/iPad), Merge-/Pausen-Logik und
-das Clipping an der Tagesgrenze.
+The tests build a small fake `knowledgeC.db` through the `sqlite3` CLI and exercise
+the real query path: device filter (Mac vs. iPhone/iPad), merge/break logic and the
+clipping at the day boundary.
 
-Optional global installieren (landet in `$GOPATH/bin`, meist `~/dev/go/bin`):
+Optionally install globally (lands in `$GOPATH/bin`, usually `~/go/bin`):
 
 ```sh
 go install .
 ```
 
-## Voraussetzung: Full Disk Access
-
-`knowledgeC.db` ist durch macOS (TCC) geschützt. Das ausführende Terminal-Programm
-braucht **Full Disk Access**, sonst scheitert das Öffnen mit `unable to open database file`:
-
-1. Systemeinstellungen → Datenschutz & Sicherheit → Festplattenvollzugriff
-2. Terminal (bzw. iTerm/Ghostty/…) hinzufügen und aktivieren
-3. Terminal neu starten
-
-Das hängt am Terminal, nicht am Tool selbst.
-
-## Benutzung
+Or via Homebrew:
 
 ```sh
-worktt                      # letzte 7 Tage (default, endet heute)
-worktt -end 2026-06-17      # 7-Tage-Fenster endend an diesem Datum
-worktt -date 2026-06-16     # Tagesdetail mit Intervall-Tabelle
-worktt -until 18:00         # Aktivität ab 18:00 ignorieren (private Abendnutzung)
-worktt -db <pfad>           # andere knowledgeC.db verwenden
+brew install sipfl/tap/worktt
 ```
 
-`-until HH:MM` setzt eine Tages-Obergrenze: Aktivität ab dieser Uhrzeit zählt nicht
-mehr als Arbeitszeit. Nutzt du den Rechner abends noch privat, blendest du das damit
-aus. Ein Block, der über die Grenze läuft (z.B. 17:00–19:00 bei `-until 18:00`), wird
-an ihr abgeschnitten. Das Flag gilt für jeden Tag des Fensters und lässt sich mit
-`-date`, `-end` und `-db` kombinieren.
+## Prerequisite: Full Disk Access
 
-### Übersicht (default)
+`knowledgeC.db` is protected by macOS (TCC). The terminal program running the tool
+needs **Full Disk Access**, otherwise opening it fails with `unable to open database file`:
+
+1. System Settings → Privacy & Security → Full Disk Access
+2. Add and enable your terminal (Terminal / iTerm / Ghostty / …)
+3. Restart the terminal
+
+This is tied to the terminal, not to the tool itself.
+
+## Usage
+
+```sh
+worktt                      # last 7 days (default, ending today)
+worktt -end 2026-06-17      # 7-day window ending on this date
+worktt -date 2026-06-16     # single-day detail with interval table
+worktt -until 18:00         # ignore activity from 18:00 on (private evening use)
+worktt -db <path>           # use a different knowledgeC.db
+```
+
+`-until HH:MM` sets a daily cutoff: activity from this time on no longer counts as
+working time. If you keep using the machine privately in the evening, this excludes
+it. A block that spans the cutoff (e.g. 17:00–19:00 with `-until 18:00`) is clipped
+to it. The flag applies to every day in the window and combines with `-date`, `-end`
+and `-db`.
+
+### Overview (default)
 
 ```
-Letzte 7 Tage (18.06.2026 – 24.06.2026)
+Last 7 days (18.06.2026 – 24.06.2026)
 
-Tag  Datum   Beginn  Ende   Brutto   Aktiv    Pause
+Day  Date    Start  End    Gross    Active   Break
 ...
-                            15h 19m  12h 22m
+                           15h 19m  12h 22m
 ```
 
-### Tagesdetail (`-date`)
+### Single-day detail (`-date`)
 
 ```
-Mo, 15.06.2026
+Mon, 15.06.2026
 ──────────────────────
-Von    Bis    Dauer   Status
-07:15  07:41  26m     aktiv
-07:41  07:57  17m     Pause
+From   To     Length  Status
+07:15  07:41  26m     active
+07:41  07:57  17m     break
 ...
 
-Beginn:  07:15:36
-Ende:    14:55:28
-Brutto:  7h 40m
-Aktiv:   6h 33m
-Pause:   1h 07m
+Start:  07:15:36
+End:    14:55:28
+Gross:  7h 40m
+Active: 6h 33m
+Break:  1h 07m
 ```
 
-## Wie es funktioniert
+## How it works
 
-- Liest `~/Library/Application Support/Knowledge/knowledgeC.db` read-only über das
-  `sqlite3`-CLI mit `immutable=1`. Kein Lock-Konflikt mit dem laufenden macOS-Prozess,
-  keine externen Go-Dependencies.
-- Primäre Quelle ist der `/app/usage`-Stream (Vordergrund-App-Nutzung). Trackt ein
-  Mac keine App-Nutzung, fällt das Tool pro Tag auf den `/display/isBacklit`-Stream
-  zurück (`ZVALUEINTEGER=1` = Display an).
-- Beide Abfragen filtern auf `ZSOURCE IS NULL`, also nur Events des Geräts, auf dem
-  das Tool läuft. Mit aktivem „Bildschirmzeit über Geräte teilen" (iCloud-Sync)
-  liegen sonst auch Events anderer Macs/iPhones/iPads in der DB; die überlappen die
-  lokalen und können einen Tag über 24h treiben.
-- Zusammenhängende Segmente mit Lücken unter 60s werden zu einem Aktiv-Block gemerged
-  (schnelle App-Wechsel bzw. Backlight-Flacker); Lücken ab 60s zählen als Pause.
-- Isolierte aktive Segmente unter 90s fallen raus (z.B. abends kurz reingeschaut),
-  damit Beginn/Ende/Brutto realistisch bleiben.
-- Intervalle werden an der Tagesgrenze abgeschnitten, damit kein Segment in den
-  Folgetag überläuft. Mit `-until HH:MM` wird stattdessen an dieser Uhrzeit
-  abgeschnitten; Aktivität ab dann fällt komplett raus.
-- **Brutto** = Ende minus Beginn. **Aktiv** = Summe der Aktiv-Blöcke. **Pause** = Brutto minus Aktiv.
+- Reads `~/Library/Application Support/Knowledge/knowledgeC.db` read-only through the
+  `sqlite3` CLI with `immutable=1`. No lock conflict with the running macOS process,
+  no external Go dependencies.
+- The primary source is the `/app/usage` stream (foreground app usage). If a Mac does
+  not track app usage, the tool falls back per day to the `/display/isBacklit` stream
+  (`ZVALUEINTEGER=1` = display on).
+- Both queries filter on `ZSOURCE IS NULL`, i.e. only events of the device the tool
+  runs on. With "share across devices" (iCloud sync) enabled, the DB also holds events
+  from other Macs/iPhones/iPads; those overlap the local ones and can push a day past 24h.
+- Contiguous segments separated by gaps under 60s are merged into one active block
+  (rapid app switches or backlight flicker); gaps of 60s or more count as a break.
+- Isolated active segments under 90s are dropped (e.g. a quick glance in the evening),
+  so start/end/gross stay realistic.
+- Intervals are clipped at the day boundary so no segment spills into the next day.
+  With `-until HH:MM` the clipping happens at that time instead; activity from then on
+  is dropped entirely.
+- **Gross** = end minus start. **Active** = sum of the active blocks. **Break** = gross minus active.
 
-## Einschränkungen
+## Limitations
 
-- Heutige Daten erscheinen erst, wenn macOS sie aus dem WAL ins Haupt-DB-File
-  checkpointet. `immutable=1` ignoriert das WAL, daher kann „heute" kurz leer sein.
-  Für vergangene Tage spielt das keine Rolle.
-- Setzt voraus, dass `/usr/bin/sqlite3` vorhanden ist (auf macOS Standard).
-- Misst App-Nutzung, nicht tatsächliche Arbeit: eine App im Vordergrund zählt als
-  aktiv, auch wenn gerade nichts getan wird; Arbeit ohne Mac wird nicht erfasst.
+- Today's data only shows up once macOS checkpoints it from the WAL into the main DB
+  file. `immutable=1` ignores the WAL, so "today" may briefly be empty. This does not
+  affect past days.
+- Requires `/usr/bin/sqlite3` (standard on macOS).
+- Measures app usage, not actual work: a foreground app counts as active even when
+  nothing is being done; work away from the Mac is not captured.

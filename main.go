@@ -66,9 +66,9 @@ func (d dayStats) active() time.Duration {
 }
 func (d dayStats) breaks() time.Duration { return d.gross() - d.active() }
 
-var deDay = map[time.Weekday]string{
-	time.Monday: "Mo", time.Tuesday: "Di", time.Wednesday: "Mi",
-	time.Thursday: "Do", time.Friday: "Fr", time.Saturday: "Sa", time.Sunday: "So",
+var weekday = map[time.Weekday]string{
+	time.Monday: "Mon", time.Tuesday: "Tue", time.Wednesday: "Wed",
+	time.Thursday: "Thu", time.Friday: "Fri", time.Saturday: "Sat", time.Sunday: "Sun",
 }
 
 func defaultDB() string {
@@ -96,10 +96,10 @@ func queryStream(db, stream string, from, to time.Time, onlyOn bool) ([]interval
 			stderr = strings.TrimSpace(string(ee.Stderr))
 		}
 		if strings.Contains(stderr, "unable to open database") {
-			return nil, fmt.Errorf("kann %s nicht öffnen.\n"+
-				"knowledgeC.db ist durch macOS geschützt: gib deinem Terminal "+
-				"Full Disk Access\n(Systemeinstellungen → Datenschutz & Sicherheit "+
-				"→ Festplattenvollzugriff), danach Terminal neu starten.", db)
+			return nil, fmt.Errorf("cannot open %s.\n"+
+				"knowledgeC.db is protected by macOS: grant your terminal "+
+				"Full Disk Access\n(System Settings → Privacy & Security "+
+				"→ Full Disk Access), then restart the terminal.", db)
 		}
 		if stderr != "" {
 			return nil, fmt.Errorf("sqlite3: %s", stderr)
@@ -214,38 +214,38 @@ func fmtDur(d time.Duration) string {
 }
 
 func printDay(d dayStats) {
-	hdr := fmt.Sprintf("%s, %s", deDay[d.date.Weekday()], d.date.Format("02.01.2006"))
+	hdr := fmt.Sprintf("%s, %s", weekday[d.date.Weekday()], d.date.Format("02.01.2006"))
 	fmt.Println(hdr)
 	fmt.Println(strings.Repeat("─", len(hdr)+8))
 	if !d.hasData {
-		fmt.Println("keine Aktivität")
+		fmt.Println("no activity")
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "Von\tBis\tDauer\tStatus")
+	fmt.Fprintln(w, "From\tTo\tLength\tStatus")
 	for i, iv := range d.ivs {
-		fmt.Fprintf(w, "%s\t%s\t%s\taktiv\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\tactive\n",
 			iv.start.Format("15:04"), iv.end.Format("15:04"), fmtDur(iv.end.Sub(iv.start)))
 		if i < len(d.ivs)-1 {
 			next := d.ivs[i+1].start
-			fmt.Fprintf(w, "%s\t%s\t%s\tPause\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\tbreak\n",
 				iv.end.Format("15:04"), next.Format("15:04"), fmtDur(next.Sub(iv.end)))
 		}
 	}
 	w.Flush()
 	fmt.Println()
-	fmt.Printf("Beginn:  %s\n", d.begin().Format("15:04:05"))
-	fmt.Printf("Ende:    %s\n", d.end().Format("15:04:05"))
-	fmt.Printf("Brutto:  %s\n", fmtDur(d.gross()))
-	fmt.Printf("Aktiv:   %s\n", fmtDur(d.active()))
-	fmt.Printf("Pause:   %s\n", fmtDur(d.breaks()))
+	fmt.Printf("Start:  %s\n", d.begin().Format("15:04:05"))
+	fmt.Printf("End:    %s\n", d.end().Format("15:04:05"))
+	fmt.Printf("Gross:  %s\n", fmtDur(d.gross()))
+	fmt.Printf("Active: %s\n", fmtDur(d.active()))
+	fmt.Printf("Break:  %s\n", fmtDur(d.breaks()))
 }
 
 func printRange(db string, end time.Time, until time.Duration) error {
 	start := end.AddDate(0, 0, -6)
-	fmt.Printf("Letzte 7 Tage (%s – %s)\n\n", start.Format("02.01.2006"), end.Format("02.01.2006"))
+	fmt.Printf("Last 7 days (%s – %s)\n\n", start.Format("02.01.2006"), end.Format("02.01.2006"))
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "Tag\tDatum\tBeginn\tEnde\tBrutto\tAktiv\tPause")
+	fmt.Fprintln(w, "Day\tDate\tStart\tEnd\tGross\tActive\tBreak")
 	var totActive, totGross time.Duration
 	for i := 0; i < 7; i++ {
 		day := start.AddDate(0, 0, i)
@@ -253,7 +253,7 @@ func printRange(db string, end time.Time, until time.Duration) error {
 		if err != nil {
 			return err
 		}
-		label := deDay[day.Weekday()]
+		label := weekday[day.Weekday()]
 		date := day.Format("02.01.")
 		if !d.hasData {
 			fmt.Fprintf(w, "%s\t%s\t-\t-\t-\t-\t-\n", label, date)
@@ -267,7 +267,7 @@ func printRange(db string, end time.Time, until time.Duration) error {
 	}
 	fmt.Fprintf(w, "\t\t\t\t%s\t%s\t\n", fmtDur(totGross), fmtDur(totActive))
 	w.Flush()
-	fmt.Println("\nSumme = Brutto/Aktiv über alle Tage mit Aktivität.")
+	fmt.Println("\nTotal = gross/active across days with activity.")
 	return nil
 }
 
@@ -301,7 +301,7 @@ func main() {
 	if *dateFlag != "" {
 		day, err := time.ParseInLocation(layout, *dateFlag, time.Local)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "ungültiges Datum:", err)
+			fmt.Fprintln(os.Stderr, "invalid date:", err)
 			os.Exit(1)
 		}
 		d, err := statsForDay(*dbFlag, day, until)
@@ -317,7 +317,7 @@ func main() {
 	if *endFlag != "" {
 		t, err := time.ParseInLocation(layout, *endFlag, time.Local)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "ungültiges Datum:", err)
+			fmt.Fprintln(os.Stderr, "invalid date:", err)
 			os.Exit(1)
 		}
 		end = t
@@ -336,7 +336,7 @@ func parseUntil(s string) (time.Duration, error) {
 	}
 	t, err := time.Parse("15:04", s)
 	if err != nil {
-		return 0, fmt.Errorf("ungültige Uhrzeit %q für -until (erwartet HH:MM)", s)
+		return 0, fmt.Errorf("invalid time %q for -until (expected HH:MM)", s)
 	}
 	return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute, nil
 }
