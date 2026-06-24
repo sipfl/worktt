@@ -63,8 +63,13 @@ func defaultDB() string {
 
 func queryRows(db string, from, to time.Time) ([]rawRow, error) {
 	uri := "file:" + db + "?immutable=1"
+	// ZSOURCE IS NULL keeps only events recorded on this machine. With Screen
+	// Time "share across devices" enabled, knowledgeC.db also holds backlight
+	// events synced from other devices (ZSOURCE set, ZSOURCE.ZDEVICEID a peer
+	// UUID); those overlap the local ones and can push a day past 24h.
 	q := fmt.Sprintf(`SELECT ZSTARTDATE, ZENDDATE, ZVALUEINTEGER FROM ZOBJECT `+
-		`WHERE ZSTREAMNAME='/display/isBacklit' AND ZSTARTDATE >= %d AND ZSTARTDATE < %d `+
+		`WHERE ZSTREAMNAME='/display/isBacklit' AND ZSOURCE IS NULL `+
+		`AND ZSTARTDATE >= %d AND ZSTARTDATE < %d `+
 		`ORDER BY ZSTARTDATE;`, from.Unix()-cocoaEpoch, to.Unix()-cocoaEpoch)
 	out, err := exec.Command("sqlite3", "-separator", "|", uri, q).Output()
 	if err != nil {

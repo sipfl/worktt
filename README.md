@@ -68,6 +68,10 @@ Pause:   1h 07m
   `sqlite3`-CLI mit `immutable=1`. Kein Lock-Konflikt mit dem laufenden macOS-Prozess,
   keine externen Go-Dependencies.
 - Quelle ist der `/display/isBacklit`-Stream (Display an/aus).
+- Filtert auf `ZSOURCE IS NULL`, also nur Events des Geräts, auf dem das Tool
+  läuft. Mit aktivem „Bildschirmzeit über Geräte teilen" (iCloud-Sync) liegen
+  sonst auch die Backlight-Events anderer Macs in der DB; die überlappen die
+  lokalen und können einen Tag über 24h treiben.
 - Zusammenhängende „an"-Phasen mit Lücken unter 60s werden gemerged (Flacker).
 - Isolierte aktive Segmente unter 90s fallen raus (z.B. abends kurz reingeschaut),
   damit Beginn/Ende/Brutto realistisch bleiben.
