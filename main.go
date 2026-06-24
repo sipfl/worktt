@@ -160,9 +160,19 @@ func mergeIntervals(rows []interval) []interval {
 	return out
 }
 
-func statsForDay(db string, day time.Time) (dayStats, error) {
+// untilNone is the sentinel for statsForDay's until parameter meaning "no
+// end-of-day cutoff" (look at the whole day, up to midnight).
+const untilNone = time.Duration(-1)
+
+// statsForDay derives a day's activity. When until >= 0 it is a duration since
+// midnight: activity at or after that time of day is ignored (e.g. private
+// evening use) and a block spanning the cutoff is clipped to it.
+func statsForDay(db string, day time.Time, until time.Duration) (dayStats, error) {
 	from := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.Local)
 	to := from.AddDate(0, 0, 1)
+	if until >= 0 {
+		to = from.Add(until)
+	}
 	// Prefer app usage; fall back to the display backlight stream on machines
 	// that don't record app usage at all (no /app/usage rows for the day).
 	rows, err := queryStream(db, appUsageStream, from, to, false)
@@ -175,9 +185,9 @@ func statsForDay(db string, day time.Time) (dayStats, error) {
 			return dayStats{}, err
 		}
 	}
-	// Safety net: clip every interval to the day. A segment can never spill into
-	// the next day and inflate gross/active (the old display stream once logged a
-	// single 24h block across a night).
+	// Safety net: clip every interval to [from, to]. A segment can never spill
+	// past the day (or, with -until set, past the cutoff) and inflate gross/active
+	// (the old display stream once logged a single 24h block across a night).
 	var ivs []interval
 	for _, iv := range mergeIntervals(rows) {
 		if iv.start.Before(from) {
@@ -231,7 +241,7 @@ func printDay(d dayStats) {
 	fmt.Printf("Pause:   %s\n", fmtDur(d.breaks()))
 }
 
-func printRange(db string, end time.Time) error {
+func printRange(db string, end time.Time, until time.Duration) error {
 	start := end.AddDate(0, 0, -6)
 	fmt.Printf("Letzte 7 Tage (%s – %s)\n\n", start.Format("02.01.2006"), end.Format("02.01.2006"))
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
@@ -239,7 +249,7 @@ func printRange(db string, end time.Time) error {
 	var totActive, totGross time.Duration
 	for i := 0; i < 7; i++ {
 		day := start.AddDate(0, 0, i)
-		d, err := statsForDay(db, day)
+		d, err := statsForDay(db, day, until)
 		if err != nil {
 			return err
 		}
@@ -270,6 +280,7 @@ func main() {
 		dateFlag    = flag.String("date", "", "single day detail view (YYYY-MM-DD)")
 		endFlag     = flag.String("end", "", "7-day overview ending on this date (YYYY-MM-DD, default today)")
 		dbFlag      = flag.String("db", defaultDB(), "path to knowledgeC.db")
+		untilFlag   = flag.String("until", "", "ignore activity at/after this time of day (HH:MM), e.g. private evening use")
 		versionFlag = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
@@ -281,13 +292,19 @@ func main() {
 
 	const layout = "2006-01-02"
 
+	until, err := parseUntil(*untilFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	if *dateFlag != "" {
 		day, err := time.ParseInLocation(layout, *dateFlag, time.Local)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "ungültiges Datum:", err)
 			os.Exit(1)
 		}
-		d, err := statsForDay(*dbFlag, day)
+		d, err := statsForDay(*dbFlag, day, until)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -305,8 +322,21 @@ func main() {
 		}
 		end = t
 	}
-	if err := printRange(*dbFlag, end); err != nil {
+	if err := printRange(*dbFlag, end, until); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// parseUntil turns an "HH:MM" wall-clock string into a duration since midnight.
+// An empty string yields untilNone (no cutoff).
+func parseUntil(s string) (time.Duration, error) {
+	if s == "" {
+		return untilNone, nil
+	}
+	t, err := time.Parse("15:04", s)
+	if err != nil {
+		return 0, fmt.Errorf("ungültige Uhrzeit %q für -until (erwartet HH:MM)", s)
+	}
+	return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute, nil
 }
