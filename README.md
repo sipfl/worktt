@@ -1,13 +1,23 @@
 # worktt
 
-Arbeitszeiten aus der macOS `knowledgeC.db` ableiten. Liest den Display-Backlight-Stream
-(`/display/isBacklit`) und leitet daraus Beginn, Ende, Brutto-, Aktiv- und Pausenzeit ab.
+Arbeitszeiten aus der macOS `knowledgeC.db` ableiten. Liest den App-Nutzungs-Stream
+(`/app/usage`) des lokalen Macs und leitet daraus Beginn, Ende, Brutto-, Aktiv- und Pausenzeit ab.
 
 ## Build
 
 ```sh
 go build -o worktt .
 ```
+
+## Tests
+
+```sh
+go test ./...
+```
+
+Die Tests bauen über das `sqlite3`-CLI eine kleine Fake-`knowledgeC.db` und prüfen
+den echten Query-Pfad: Geräte-Filter (Mac vs. iPhone/iPad), Merge-/Pausen-Logik und
+das Clipping an der Tagesgrenze.
 
 Optional global installieren (landet in `$GOPATH/bin`, meist `~/dev/go/bin`):
 
@@ -67,11 +77,16 @@ Pause:   1h 07m
 - Liest `~/Library/Application Support/Knowledge/knowledgeC.db` read-only über das
   `sqlite3`-CLI mit `immutable=1`. Kein Lock-Konflikt mit dem laufenden macOS-Prozess,
   keine externen Go-Dependencies.
-- Quelle ist der `/display/isBacklit`-Stream (Display an/aus).
-- Zusammenhängende „an"-Phasen mit Lücken unter 60s werden gemerged (Flacker).
+- Quelle ist der `/app/usage`-Stream (Vordergrund-App-Nutzung). Nur lokale Mac-Events
+  zählen: per Geräte-Filter (`ZSOURCE.ZDEVICEID IS NULL`) werden synchronisierte
+  iPhone-/iPad-Events ausgeschlossen.
+- Zusammenhängende Segmente mit Lücken unter 60s werden zu einem Aktiv-Block gemerged
+  (schnelle App-Wechsel); Lücken ab 60s zählen als Pause.
 - Isolierte aktive Segmente unter 90s fallen raus (z.B. abends kurz reingeschaut),
   damit Beginn/Ende/Brutto realistisch bleiben.
-- **Brutto** = Ende minus Beginn. **Aktiv** = Summe der „an"-Phasen. **Pause** = Brutto minus Aktiv.
+- Intervalle werden an der Tagesgrenze abgeschnitten, damit kein Segment in den
+  Folgetag überläuft.
+- **Brutto** = Ende minus Beginn. **Aktiv** = Summe der Aktiv-Blöcke. **Pause** = Brutto minus Aktiv.
 
 ## Einschränkungen
 
@@ -79,5 +94,5 @@ Pause:   1h 07m
   checkpointet. `immutable=1` ignoriert das WAL, daher kann „heute" kurz leer sein.
   Für vergangene Tage spielt das keine Rolle.
 - Setzt voraus, dass `/usr/bin/sqlite3` vorhanden ist (auf macOS Standard).
-- Misst Display-Aktivität, nicht tatsächliche Arbeit: ein offener Bildschirm ohne
-  Tätigkeit zählt als aktiv, externe Arbeit ohne Mac wird nicht erfasst.
+- Misst App-Nutzung, nicht tatsächliche Arbeit: eine App im Vordergrund zählt als
+  aktiv, auch wenn gerade nichts getan wird; Arbeit ohne Mac wird nicht erfasst.

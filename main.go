@@ -17,18 +17,20 @@ import (
 // seconds between unix epoch (1970) and cocoa/mac absolute epoch (2001)
 const cocoaEpoch = 978307200
 
-// sub-minute backlight flicker is merged into the surrounding active block;
-// gaps at or above this threshold count as breaks.
+// activity is derived from foreground app usage on the local Mac. The display
+// backlight stream proved unreliable (it once logged a single 24h "on" block
+// across a night, inflating one day and hiding the next morning's start) and
+// app usage also stays correct when working with the lid open and no external
+// display. Synced iPhone/iPad events are excluded via the device filter below.
+const streamName = "/app/usage"
+
+// sub-minute gaps between app-usage rows (rapid app switches) are merged into
+// one active block; gaps at or above this threshold count as breaks.
 const mergeGap = 60 * time.Second
 
-// isolated active blocks shorter than this (e.g. briefly waking the screen
-// in the evening) are not real working time and get dropped.
+// isolated active blocks shorter than this (e.g. a quick glance at the screen)
+// are not real working time and get dropped.
 const minActive = 90 * time.Second
-
-type rawRow struct {
-	start, end time.Time
-	val        int
-}
 
 type interval struct{ start, end time.Time }
 
@@ -61,11 +63,16 @@ func defaultDB() string {
 	return filepath.Join(os.Getenv("HOME"), "Library/Application Support/Knowledge/knowledgeC.db")
 }
 
-func queryRows(db string, from, to time.Time) ([]rawRow, error) {
+func queryIntervals(db string, from, to time.Time) ([]interval, error) {
 	uri := "file:" + db + "?immutable=1"
-	q := fmt.Sprintf(`SELECT ZSTARTDATE, ZENDDATE, ZVALUEINTEGER FROM ZOBJECT `+
-		`WHERE ZSTREAMNAME='/display/isBacklit' AND ZSTARTDATE >= %d AND ZSTARTDATE < %d `+
-		`ORDER BY ZSTARTDATE;`, from.Unix()-cocoaEpoch, to.Unix()-cocoaEpoch)
+	// LEFT JOIN ZSOURCE + "ZDEVICEID IS NULL" keeps only events recorded on this
+	// Mac. knowledgeC syncs iPhone/iPad events into the same table; without the
+	// filter their app usage would count as working time.
+	q := fmt.Sprintf(`SELECT o.ZSTARTDATE, o.ZENDDATE FROM ZOBJECT o `+
+		`LEFT JOIN ZSOURCE s ON o.ZSOURCE = s.Z_PK `+
+		`WHERE o.ZSTREAMNAME='%s' AND s.ZDEVICEID IS NULL `+
+		`AND o.ZSTARTDATE >= %d AND o.ZSTARTDATE < %d `+
+		`ORDER BY o.ZSTARTDATE;`, streamName, from.Unix()-cocoaEpoch, to.Unix()-cocoaEpoch)
 	out, err := exec.Command("sqlite3", "-separator", "|", uri, q).Output()
 	if err != nil {
 		var stderr string
@@ -83,34 +90,33 @@ func queryRows(db string, from, to time.Time) ([]rawRow, error) {
 		}
 		return nil, fmt.Errorf("sqlite3: %w", err)
 	}
-	var rows []rawRow
+	var ivs []interval
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
 		f := strings.Split(line, "|")
-		if len(f) != 3 {
+		if len(f) != 2 {
 			continue
 		}
 		s, _ := strconv.ParseFloat(f[0], 64)
 		e, _ := strconv.ParseFloat(f[1], 64)
-		v, _ := strconv.Atoi(f[2])
-		rows = append(rows, rawRow{
+		ivs = append(ivs, interval{
 			start: time.Unix(int64(s)+cocoaEpoch, 0),
 			end:   time.Unix(int64(e)+cocoaEpoch, 0),
-			val:   v,
 		})
 	}
-	return rows, nil
+	return ivs, nil
 }
 
-// mergeOn keeps only backlit-on intervals, drops zero-length flicker and
-// merges intervals separated by less than mergeGap.
-func mergeOn(rows []rawRow) []interval {
+// mergeIntervals drops zero-length rows, merges intervals separated by less
+// than mergeGap (rapid app switches) and discards isolated blocks shorter than
+// minActive.
+func mergeIntervals(rows []interval) []interval {
 	var ons []interval
 	for _, r := range rows {
-		if r.val == 1 && r.end.After(r.start) {
-			ons = append(ons, interval{r.start, r.end})
+		if r.end.After(r.start) {
+			ons = append(ons, r)
 		}
 	}
 	sort.Slice(ons, func(i, j int) bool { return ons[i].start.Before(ons[j].start) })
@@ -141,11 +147,25 @@ func mergeOn(rows []rawRow) []interval {
 func statsForDay(db string, day time.Time) (dayStats, error) {
 	from := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.Local)
 	to := from.AddDate(0, 0, 1)
-	rows, err := queryRows(db, from, to)
+	rows, err := queryIntervals(db, from, to)
 	if err != nil {
 		return dayStats{}, err
 	}
-	ivs := mergeOn(rows)
+	// Safety net: clip every interval to the day. A segment can never spill into
+	// the next day and inflate gross/active (the old display stream once logged a
+	// single 24h block across a night).
+	var ivs []interval
+	for _, iv := range mergeIntervals(rows) {
+		if iv.start.Before(from) {
+			iv.start = from
+		}
+		if iv.end.After(to) {
+			iv.end = to
+		}
+		if iv.end.After(iv.start) {
+			ivs = append(ivs, iv)
+		}
+	}
 	return dayStats{date: from, ivs: ivs, hasData: len(ivs) > 0}, nil
 }
 
