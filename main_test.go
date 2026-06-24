@@ -71,7 +71,7 @@ func TestStatsForDay(t *testing.T) {
 		// backlight present but ignored, because app usage exists (no fallback)
 		{backlitStream, true, 1, tm("2026-06-24 05:00:00"), tm("2026-06-24 05:30:00")},
 	}
-	d, err := statsForDay(fakeDB(t, rows), tm("2026-06-24 00:00:00"))
+	d, err := statsForDay(fakeDB(t, rows), tm("2026-06-24 00:00:00"), untilNone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestStatsForDayFallsBackToBacklight(t *testing.T) {
 		// synced backlight from another Mac -> excluded by the device filter
 		{backlitStream, false, 1, tm("2026-06-24 06:00:00"), tm("2026-06-24 07:00:00")},
 	}
-	d, err := statsForDay(fakeDB(t, rows), tm("2026-06-24 00:00:00"))
+	d, err := statsForDay(fakeDB(t, rows), tm("2026-06-24 00:00:00"), untilNone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestStatsForDayClipsMidnight(t *testing.T) {
 	rows := []row{
 		{appUsageStream, true, 0, tm("2026-06-24 23:30:00"), tm("2026-06-25 00:30:00")},
 	}
-	d, err := statsForDay(fakeDB(t, rows), tm("2026-06-24 00:00:00"))
+	d, err := statsForDay(fakeDB(t, rows), tm("2026-06-24 00:00:00"), untilNone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +138,35 @@ func TestStatsForDayClipsMidnight(t *testing.T) {
 	}
 	if got, want := d.active(), 30*time.Minute; got != want {
 		t.Errorf("active = %s, want %s", got, want)
+	}
+}
+
+// With -until set, activity at or after the cutoff time is ignored and a block
+// spanning the cutoff is clipped to it (e.g. private evening use after work).
+func TestStatsForDayUntilCutoff(t *testing.T) {
+	rows := []row{
+		// morning work block
+		{appUsageStream, true, 0, tm("2026-06-24 08:00:00"), tm("2026-06-24 12:00:00")},
+		// block spanning the 18:00 cutoff -> clipped to 18:00 (1h counts)
+		{appUsageStream, true, 0, tm("2026-06-24 17:00:00"), tm("2026-06-24 19:00:00")},
+		// private evening use after the cutoff -> dropped entirely
+		{appUsageStream, true, 0, tm("2026-06-24 20:00:00"), tm("2026-06-24 22:00:00")},
+	}
+	d, err := statsForDay(fakeDB(t, rows), tm("2026-06-24 00:00:00"), 18*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(d.ivs), 2; got != want {
+		t.Fatalf("intervals = %d, want %d (%v)", got, want, d.ivs)
+	}
+	if got, want := d.begin(), tm("2026-06-24 08:00:00"); !got.Equal(want) {
+		t.Errorf("begin = %s, want %s", got, want)
+	}
+	if got, want := d.end(), tm("2026-06-24 18:00:00"); !got.Equal(want) {
+		t.Errorf("end = %s, want %s (clipped to cutoff)", got, want)
+	}
+	if got, want := d.active(), 5*time.Hour; got != want {
+		t.Errorf("active = %s, want %s (4h morning + 1h until cutoff)", got, want)
 	}
 }
 

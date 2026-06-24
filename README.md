@@ -43,8 +43,15 @@ Das hängt am Terminal, nicht am Tool selbst.
 worktt                      # letzte 7 Tage (default, endet heute)
 worktt -end 2026-06-17      # 7-Tage-Fenster endend an diesem Datum
 worktt -date 2026-06-16     # Tagesdetail mit Intervall-Tabelle
+worktt -until 18:00         # Aktivität ab 18:00 ignorieren (private Abendnutzung)
 worktt -db <pfad>           # andere knowledgeC.db verwenden
 ```
+
+`-until HH:MM` setzt eine Tages-Obergrenze: Aktivität ab dieser Uhrzeit zählt nicht
+mehr als Arbeitszeit. Nutzt du den Rechner abends noch privat, blendest du das damit
+aus. Ein Block, der über die Grenze läuft (z.B. 17:00–19:00 bei `-until 18:00`), wird
+an ihr abgeschnitten. Das Flag gilt für jeden Tag des Fensters und lässt sich mit
+`-date`, `-end` und `-db` kombinieren.
 
 ### Übersicht (default)
 
@@ -90,7 +97,8 @@ Pause:   1h 07m
 - Isolierte aktive Segmente unter 90s fallen raus (z.B. abends kurz reingeschaut),
   damit Beginn/Ende/Brutto realistisch bleiben.
 - Intervalle werden an der Tagesgrenze abgeschnitten, damit kein Segment in den
-  Folgetag überläuft.
+  Folgetag überläuft. Mit `-until HH:MM` wird stattdessen an dieser Uhrzeit
+  abgeschnitten; Aktivität ab dann fällt komplett raus.
 - **Brutto** = Ende minus Beginn. **Aktiv** = Summe der Aktiv-Blöcke. **Pause** = Brutto minus Aktiv.
 
 ## Einschränkungen
