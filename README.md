@@ -4,33 +4,16 @@ Derive working hours from the macOS `knowledgeC.db`. Uses the local Mac's app-us
 stream (`/app/usage`) as the primary source, with a fallback to the display-backlight
 stream (`/display/isBacklit`), and reports start, end, gross, active and break time.
 
-## Build
-
-```sh
-go build -o worktt .
-```
-
-## Tests
-
-```sh
-go test ./...
-```
-
-The tests build a small fake `knowledgeC.db` through the `sqlite3` CLI and exercise
-the real query path: device filter (Mac vs. iPhone/iPad), merge/break logic and the
-clipping at the day boundary.
-
-Optionally install globally (lands in `$GOPATH/bin`, usually `~/go/bin`):
-
-```sh
-go install .
-```
-
-Or via Homebrew:
+## Installation
 
 ```sh
 brew install sipfl/tap/worktt
 ```
+
+This taps `sipfl/tap` automatically. Update later with `brew upgrade worktt`.
+
+Then grant Full Disk Access (see below) — without it the tool cannot read the
+protected database.
 
 ## Prerequisite: Full Disk Access
 
@@ -85,6 +68,28 @@ Gross:  7h 40m
 Active: 6h 33m
 Break:  1h 07m
 ```
+
+## Build from source
+
+```sh
+go build -o worktt .
+```
+
+Install globally instead (lands in `$GOPATH/bin`, usually `~/go/bin`):
+
+```sh
+go install .
+```
+
+### Tests
+
+```sh
+go test ./...
+```
+
+The tests build a small fake `knowledgeC.db` through the `sqlite3` CLI and exercise
+the real query path: device filter (Mac vs. iPhone/iPad), merge/break logic and the
+clipping at the day boundary.
 
 ## How it works
 
