@@ -1,0 +1,49 @@
+name: Bump Homebrew formula
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.1.0)"
+        required: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute tarball sha256
+        id: src
+        run: |
+          url="https://github.com/${{ github.repository }}/archive/refs/tags/${{ steps.tag.outputs.tag }}.tar.gz"
+          sha=$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: sipfl/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        run: |
+          f=Formula/worktt.rb
+          sed -i -E "s#^  url \".*\"#  url \"${{ steps.src.outputs.url }}\"#" "$f"
+          sed -i -E "s#^  sha256 \".*\"#  sha256 \"${{ steps.src.outputs.sha }}\"#" "$f"
+          git diff
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git commit -am "worktt ${{ steps.tag.outputs.tag }}"; then
+            git push
+          else
+            echo "Formula already up to date, nothing to do."
+          fi
