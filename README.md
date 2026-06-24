@@ -15,6 +15,17 @@ Optional global installieren (landet in `$GOPATH/bin`, meist `~/dev/go/bin`):
 go install .
 ```
 
+## Voraussetzung: Full Disk Access
+
+`knowledgeC.db` ist durch macOS (TCC) geschützt. Das ausführende Terminal-Programm
+braucht **Full Disk Access**, sonst scheitert das Öffnen mit `unable to open database file`:
+
+1. Systemeinstellungen → Datenschutz & Sicherheit → Festplattenvollzugriff
+2. Terminal (bzw. iTerm/Ghostty/…) hinzufügen und aktivieren
+3. Terminal neu starten
+
+Das hängt am Terminal, nicht am Tool selbst.
+
 ## Benutzung
 
 ```sh

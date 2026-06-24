@@ -68,6 +68,19 @@ func queryRows(db string, from, to time.Time) ([]rawRow, error) {
 		`ORDER BY ZSTARTDATE;`, from.Unix()-cocoaEpoch, to.Unix()-cocoaEpoch)
 	out, err := exec.Command("sqlite3", "-separator", "|", uri, q).Output()
 	if err != nil {
+		var stderr string
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = strings.TrimSpace(string(ee.Stderr))
+		}
+		if strings.Contains(stderr, "unable to open database") {
+			return nil, fmt.Errorf("kann %s nicht öffnen.\n"+
+				"knowledgeC.db ist durch macOS geschützt: gib deinem Terminal "+
+				"Full Disk Access\n(Systemeinstellungen → Datenschutz & Sicherheit "+
+				"→ Festplattenvollzugriff), danach Terminal neu starten.", db)
+		}
+		if stderr != "" {
+			return nil, fmt.Errorf("sqlite3: %s", stderr)
+		}
 		return nil, fmt.Errorf("sqlite3: %w", err)
 	}
 	var rows []rawRow
