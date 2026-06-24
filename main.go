@@ -1,4 +1,5 @@
-// worktt — derive working hours from macOS knowledgeC.db (display backlight).
+// worktt — derive working hours from macOS knowledgeC.db (app usage, with a
+// display-backlight fallback).
 package main
 
 import (
@@ -17,18 +18,28 @@ import (
 // seconds between unix epoch (1970) and cocoa/mac absolute epoch (2001)
 const cocoaEpoch = 978307200
 
-// sub-minute backlight flicker is merged into the surrounding active block;
-// gaps at or above this threshold count as breaks.
+// Activity is derived from foreground app usage on the local Mac (appUsageStream):
+// it stays correct with the lid open and no external display, where the display
+// backlight stream proved unreliable (it once logged a single 24h "on" block
+// across a night). On machines that don't record app usage, statsForDay falls
+// back to the backlight stream (backlitStream, ZVALUEINTEGER=1).
+//
+// Both queries restrict to ZSOURCE IS NULL = events recorded on this machine.
+// knowledgeC also syncs events from other devices (other Macs via Screen Time
+// "share across devices", and iPhone/iPad); those overlap the local ones and can
+// push a day past 24h.
+const (
+	appUsageStream = "/app/usage"
+	backlitStream  = "/display/isBacklit"
+)
+
+// sub-minute gaps between app-usage rows (rapid app switches) are merged into
+// one active block; gaps at or above this threshold count as breaks.
 const mergeGap = 60 * time.Second
 
-// isolated active blocks shorter than this (e.g. briefly waking the screen
-// in the evening) are not real working time and get dropped.
+// isolated active blocks shorter than this (e.g. a quick glance at the screen)
+// are not real working time and get dropped.
 const minActive = 90 * time.Second
-
-type rawRow struct {
-	start, end time.Time
-	val        int
-}
 
 type interval struct{ start, end time.Time }
 
@@ -61,16 +72,20 @@ func defaultDB() string {
 	return filepath.Join(os.Getenv("HOME"), "Library/Application Support/Knowledge/knowledgeC.db")
 }
 
-func queryRows(db string, from, to time.Time) ([]rawRow, error) {
+func queryStream(db, stream string, from, to time.Time, onlyOn bool) ([]interval, error) {
 	uri := "file:" + db + "?immutable=1"
-	// ZSOURCE IS NULL keeps only events recorded on this machine. With Screen
-	// Time "share across devices" enabled, knowledgeC.db also holds backlight
-	// events synced from other devices (ZSOURCE set, ZSOURCE.ZDEVICEID a peer
-	// UUID); those overlap the local ones and can push a day past 24h.
-	q := fmt.Sprintf(`SELECT ZSTARTDATE, ZENDDATE, ZVALUEINTEGER FROM ZOBJECT `+
-		`WHERE ZSTREAMNAME='/display/isBacklit' AND ZSOURCE IS NULL `+
+	// ZSOURCE IS NULL keeps only events recorded on this machine; synced events
+	// from other devices (other Macs via Screen Time, iPhone, iPad) have ZSOURCE
+	// set and would otherwise overlap the local ones and inflate a day past 24h.
+	cond := ""
+	if onlyOn {
+		// the backlight stream toggles on/off; only "on" (1) is active time.
+		cond = " AND ZVALUEINTEGER=1"
+	}
+	q := fmt.Sprintf(`SELECT ZSTARTDATE, ZENDDATE FROM ZOBJECT `+
+		`WHERE ZSTREAMNAME='%s' AND ZSOURCE IS NULL%s `+
 		`AND ZSTARTDATE >= %d AND ZSTARTDATE < %d `+
-		`ORDER BY ZSTARTDATE;`, from.Unix()-cocoaEpoch, to.Unix()-cocoaEpoch)
+		`ORDER BY ZSTARTDATE;`, stream, cond, from.Unix()-cocoaEpoch, to.Unix()-cocoaEpoch)
 	out, err := exec.Command("sqlite3", "-separator", "|", uri, q).Output()
 	if err != nil {
 		var stderr string
@@ -88,34 +103,33 @@ func queryRows(db string, from, to time.Time) ([]rawRow, error) {
 		}
 		return nil, fmt.Errorf("sqlite3: %w", err)
 	}
-	var rows []rawRow
+	var ivs []interval
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
 		f := strings.Split(line, "|")
-		if len(f) != 3 {
+		if len(f) != 2 {
 			continue
 		}
 		s, _ := strconv.ParseFloat(f[0], 64)
 		e, _ := strconv.ParseFloat(f[1], 64)
-		v, _ := strconv.Atoi(f[2])
-		rows = append(rows, rawRow{
+		ivs = append(ivs, interval{
 			start: time.Unix(int64(s)+cocoaEpoch, 0),
 			end:   time.Unix(int64(e)+cocoaEpoch, 0),
-			val:   v,
 		})
 	}
-	return rows, nil
+	return ivs, nil
 }
 
-// mergeOn keeps only backlit-on intervals, drops zero-length flicker and
-// merges intervals separated by less than mergeGap.
-func mergeOn(rows []rawRow) []interval {
+// mergeIntervals drops zero-length rows, merges intervals separated by less
+// than mergeGap (rapid app switches) and discards isolated blocks shorter than
+// minActive.
+func mergeIntervals(rows []interval) []interval {
 	var ons []interval
 	for _, r := range rows {
-		if r.val == 1 && r.end.After(r.start) {
-			ons = append(ons, interval{r.start, r.end})
+		if r.end.After(r.start) {
+			ons = append(ons, r)
 		}
 	}
 	sort.Slice(ons, func(i, j int) bool { return ons[i].start.Before(ons[j].start) })
@@ -146,11 +160,33 @@ func mergeOn(rows []rawRow) []interval {
 func statsForDay(db string, day time.Time) (dayStats, error) {
 	from := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.Local)
 	to := from.AddDate(0, 0, 1)
-	rows, err := queryRows(db, from, to)
+	// Prefer app usage; fall back to the display backlight stream on machines
+	// that don't record app usage at all (no /app/usage rows for the day).
+	rows, err := queryStream(db, appUsageStream, from, to, false)
 	if err != nil {
 		return dayStats{}, err
 	}
-	ivs := mergeOn(rows)
+	if len(rows) == 0 {
+		rows, err = queryStream(db, backlitStream, from, to, true)
+		if err != nil {
+			return dayStats{}, err
+		}
+	}
+	// Safety net: clip every interval to the day. A segment can never spill into
+	// the next day and inflate gross/active (the old display stream once logged a
+	// single 24h block across a night).
+	var ivs []interval
+	for _, iv := range mergeIntervals(rows) {
+		if iv.start.Before(from) {
+			iv.start = from
+		}
+		if iv.end.After(to) {
+			iv.end = to
+		}
+		if iv.end.After(iv.start) {
+			ivs = append(ivs, iv)
+		}
+	}
 	return dayStats{date: from, ivs: ivs, hasData: len(ivs) > 0}, nil
 }
 
