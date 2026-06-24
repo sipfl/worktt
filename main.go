@@ -1,4 +1,5 @@
-// worktt — derive working hours from macOS knowledgeC.db (display backlight).
+// worktt — derive working hours from macOS knowledgeC.db (app usage, with a
+// display-backlight fallback).
 package main
 
 import (
@@ -17,12 +18,20 @@ import (
 // seconds between unix epoch (1970) and cocoa/mac absolute epoch (2001)
 const cocoaEpoch = 978307200
 
-// activity is derived from foreground app usage on the local Mac. The display
+// Activity is derived from foreground app usage on the local Mac (appUsageStream):
+// it stays correct with the lid open and no external display, where the display
 // backlight stream proved unreliable (it once logged a single 24h "on" block
-// across a night, inflating one day and hiding the next morning's start) and
-// app usage also stays correct when working with the lid open and no external
-// display. Synced iPhone/iPad events are excluded via the device filter below.
-const streamName = "/app/usage"
+// across a night). On machines that don't record app usage, statsForDay falls
+// back to the backlight stream (backlitStream, ZVALUEINTEGER=1).
+//
+// Both queries restrict to ZSOURCE IS NULL = events recorded on this machine.
+// knowledgeC also syncs events from other devices (other Macs via Screen Time
+// "share across devices", and iPhone/iPad); those overlap the local ones and can
+// push a day past 24h.
+const (
+	appUsageStream = "/app/usage"
+	backlitStream  = "/display/isBacklit"
+)
 
 // sub-minute gaps between app-usage rows (rapid app switches) are merged into
 // one active block; gaps at or above this threshold count as breaks.
@@ -63,16 +72,20 @@ func defaultDB() string {
 	return filepath.Join(os.Getenv("HOME"), "Library/Application Support/Knowledge/knowledgeC.db")
 }
 
-func queryIntervals(db string, from, to time.Time) ([]interval, error) {
+func queryStream(db, stream string, from, to time.Time, onlyOn bool) ([]interval, error) {
 	uri := "file:" + db + "?immutable=1"
-	// LEFT JOIN ZSOURCE + "ZDEVICEID IS NULL" keeps only events recorded on this
-	// Mac. knowledgeC syncs iPhone/iPad events into the same table; without the
-	// filter their app usage would count as working time.
-	q := fmt.Sprintf(`SELECT o.ZSTARTDATE, o.ZENDDATE FROM ZOBJECT o `+
-		`LEFT JOIN ZSOURCE s ON o.ZSOURCE = s.Z_PK `+
-		`WHERE o.ZSTREAMNAME='%s' AND s.ZDEVICEID IS NULL `+
-		`AND o.ZSTARTDATE >= %d AND o.ZSTARTDATE < %d `+
-		`ORDER BY o.ZSTARTDATE;`, streamName, from.Unix()-cocoaEpoch, to.Unix()-cocoaEpoch)
+	// ZSOURCE IS NULL keeps only events recorded on this machine; synced events
+	// from other devices (other Macs via Screen Time, iPhone, iPad) have ZSOURCE
+	// set and would otherwise overlap the local ones and inflate a day past 24h.
+	cond := ""
+	if onlyOn {
+		// the backlight stream toggles on/off; only "on" (1) is active time.
+		cond = " AND ZVALUEINTEGER=1"
+	}
+	q := fmt.Sprintf(`SELECT ZSTARTDATE, ZENDDATE FROM ZOBJECT `+
+		`WHERE ZSTREAMNAME='%s' AND ZSOURCE IS NULL%s `+
+		`AND ZSTARTDATE >= %d AND ZSTARTDATE < %d `+
+		`ORDER BY ZSTARTDATE;`, stream, cond, from.Unix()-cocoaEpoch, to.Unix()-cocoaEpoch)
 	out, err := exec.Command("sqlite3", "-separator", "|", uri, q).Output()
 	if err != nil {
 		var stderr string
@@ -147,9 +160,17 @@ func mergeIntervals(rows []interval) []interval {
 func statsForDay(db string, day time.Time) (dayStats, error) {
 	from := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.Local)
 	to := from.AddDate(0, 0, 1)
-	rows, err := queryIntervals(db, from, to)
+	// Prefer app usage; fall back to the display backlight stream on machines
+	// that don't record app usage at all (no /app/usage rows for the day).
+	rows, err := queryStream(db, appUsageStream, from, to, false)
 	if err != nil {
 		return dayStats{}, err
+	}
+	if len(rows) == 0 {
+		rows, err = queryStream(db, backlitStream, from, to, true)
+		if err != nil {
+			return dayStats{}, err
+		}
 	}
 	// Safety net: clip every interval to the day. A segment can never spill into
 	// the next day and inflate gross/active (the old display stream once logged a

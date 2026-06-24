@@ -1,7 +1,8 @@
 # worktt
 
-Arbeitszeiten aus der macOS `knowledgeC.db` ableiten. Liest den App-Nutzungs-Stream
-(`/app/usage`) des lokalen Macs und leitet daraus Beginn, Ende, Brutto-, Aktiv- und Pausenzeit ab.
+Arbeitszeiten aus der macOS `knowledgeC.db` ableiten. Nutzt primär den App-Nutzungs-Stream
+(`/app/usage`) des lokalen Macs — mit Fallback auf den Display-Backlight-Stream
+(`/display/isBacklit`) — und leitet daraus Beginn, Ende, Brutto-, Aktiv- und Pausenzeit ab.
 
 ## Build
 
@@ -77,11 +78,15 @@ Pause:   1h 07m
 - Liest `~/Library/Application Support/Knowledge/knowledgeC.db` read-only über das
   `sqlite3`-CLI mit `immutable=1`. Kein Lock-Konflikt mit dem laufenden macOS-Prozess,
   keine externen Go-Dependencies.
-- Quelle ist der `/app/usage`-Stream (Vordergrund-App-Nutzung). Nur lokale Mac-Events
-  zählen: per Geräte-Filter (`ZSOURCE.ZDEVICEID IS NULL`) werden synchronisierte
-  iPhone-/iPad-Events ausgeschlossen.
+- Primäre Quelle ist der `/app/usage`-Stream (Vordergrund-App-Nutzung). Trackt ein
+  Mac keine App-Nutzung, fällt das Tool pro Tag auf den `/display/isBacklit`-Stream
+  zurück (`ZVALUEINTEGER=1` = Display an).
+- Beide Abfragen filtern auf `ZSOURCE IS NULL`, also nur Events des Geräts, auf dem
+  das Tool läuft. Mit aktivem „Bildschirmzeit über Geräte teilen" (iCloud-Sync)
+  liegen sonst auch Events anderer Macs/iPhones/iPads in der DB; die überlappen die
+  lokalen und können einen Tag über 24h treiben.
 - Zusammenhängende Segmente mit Lücken unter 60s werden zu einem Aktiv-Block gemerged
-  (schnelle App-Wechsel); Lücken ab 60s zählen als Pause.
+  (schnelle App-Wechsel bzw. Backlight-Flacker); Lücken ab 60s zählen als Pause.
 - Isolierte aktive Segmente unter 90s fallen raus (z.B. abends kurz reingeschaut),
   damit Beginn/Ende/Brutto realistisch bleiben.
 - Intervalle werden an der Tagesgrenze abgeschnitten, damit kein Segment in den
